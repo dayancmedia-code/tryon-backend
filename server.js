@@ -1,117 +1,182 @@
 // Gerekli kütüphaneleri dahil etme
-// Gereki kütüphaneleri dahil etme
 const express = require('express');
-const app = express(); // 'app' sadece bir kez tanımlanmalı
+const { createClient } = require('@supabase/supabase-js');
+const cors = require('cors');
+require('dotenv').config();
 
-// Middleware'lar
+// Uygulama ve middleware ayarları
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Gelen JSON verilerini okumak için middleware'i etkinleştirme
 app.use(express.json());
-app.use(require('@supabase/supabase-js')); // Bu satırda hata olabilir
-app.use(require('cors'));
-app.use(require('dotenv').config());
+
+// CORS politikası (güvenlik için)
 app.use(cors());
 
-
-// Uygulama ve port ayarları
-const port = 3000;
-
-
-// Supabase client oluşturma (Genel/Kullanıcı işlemleri için anonim anahtar)
+// Supabase client oluşturma (Servis anahtarı ile)
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    auth: { persistSession: false },
-});
-
-// Supabase admin client oluşturma (Yönetici işlemleri için servis anahtarı)
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
-// ### API Uç Noktaları ###
-
-// Kullanıcı Kayıt Endpoint'i: Yeni bir kullanıcı oluşturur ve 0 kredi atar
-app.post('/api/signup', async (req, res) => {
-    const { email, password, name } = req.body;
-    try {
-        const { data, error } = await supabase.auth.signUp({ email, password });
-        if (error) {
-            return res.status(400).json({ error: error.message });
-        }
-        await supabase.from('users').insert([{ id: data.user.id, email: data.user.email, name: name, credits: 0 }]);
-        res.status(201).json({ message: 'Kayıt başarılı! Lütfen e-postanızı doğrulayın.', user: data.user });
-    } catch (err) {
-        res.status(500).json({ error: 'Sunucu hatası.' });
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: {
+        persistSession: false
     }
 });
 
-// Kullanıcı Giriş Endpoint'i
+// Anasayfa veya temel URL için GET isteği
+app.get('/', (req, res) => {
+    res.status(200).send('Backend is running!');
+});
+
+// Kullanıcı Kayıt Olma (/api/signup)
+app.post('/api/signup', async (req, res) => {
+    const { email, password, name } = req.body;
+
+    // Gerekli alanların kontrolü
+    if (!email || !password || !name) {
+        return res.status(400).json({ error: 'E-posta, şifre ve isim gereklidir.' });
+    }
+
+    try {
+        // Supabase ile yeni kullanıcı oluşturma
+        const { data: userData, error: signUpError } = await supabase.auth.signUp({
+            email,
+            password
+        });
+
+        if (signUpError) {
+            return res.status(400).json({ error: signUpError.message });
+        }
+
+        // Yeni kullanıcı için 'users' tablosuna başlangıç kredisi ekleme
+        const { error: insertError } = await supabase
+            .from('users')
+            .insert([{ id: userData.user.id, name, credits: 100 }]);
+
+        if (insertError) {
+            return res.status(400).json({ error: insertError.message });
+        }
+
+        res.status(201).json({ message: 'User created successfully', user: userData.user });
+
+    } catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Kullanıcı Giriş Yapma (/api/login)
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ error: 'E-posta ve şifre gereklidir.' });
+    }
+
     try {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email,
+            password
+        });
+
         if (error) {
             return res.status(401).json({ error: error.message });
         }
-        res.status(200).json({ message: 'Giriş başarılı!', session: data.session });
+
+        res.status(200).json({ message: 'Login successful', session: data.session });
+
     } catch (err) {
-        res.status(500).json({ error: 'Sunucu hatası.' });
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// Try-on İşlemi İçin Kredi Düşürme Endpoint'i
+// Try-on İşlemi ve Kredi Düşürme (/api/tryon)
 app.post('/api/tryon', async (req, res) => {
     const { token } = req.body;
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-        return res.status(401).json({ error: 'Geçersiz yetkilendirme tokenı.' });
-    }
-    const { data: userData, error: fetchError } = await supabase
-        .from('users')
-        .select('credits')
-        .eq('id', user.id)
-        .single();
-    if (fetchError || !userData) {
-        return res.status(404).json({ error: 'Kullanıcı veya kredi bilgisi bulunamadı.' });
-    }
-    if (userData.credits <= 0) {
-        return res.status(400).json({ error: 'Hakkınız bitmiştir. Lütfen ödeme yapın.' });
-    }
-    const { error: creditError } = await supabase.rpc('decrease_user_credit', { user_id_uuid: user.id });
-    if (creditError) {
-        return res.status(400).json({ error: creditError.message });
-    }
-    res.status(200).json({ message: 'Try-on işlemi başarılı, krediniz düşürüldü.' });
-});
 
-// Kredi Ekleme Endpoint'i (Sadece yönetici kullanımı için)
-app.post('/api/add-credits', async (req, res) => {
-    const { email, amount } = req.body;
-    if (!email || !amount) {
-        return res.status(400).json({ error: 'E-posta ve kredi miktarı girilmesi zorunludur.' });
+    if (!token) {
+        return res.status(400).json({ error: 'Token gereklidir.' });
     }
+
     try {
-        const { data, error: fetchError } = await supabaseAdmin
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+        if (authError || !user) {
+            return res.status(401).json({ error: 'Geçersiz token.' });
+        }
+
+        // Kullanıcının mevcut kredisini al
+        const { data: userData, error: userError } = await supabase
             .from('users')
             .select('credits')
-            .eq('email', email)
+            .eq('id', user.id)
             .single();
-        if (fetchError || !data) {
+
+        if (userError || !userData) {
             return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
         }
-        const newCredits = data.credits + amount;
-        const { error: updateError } = await supabaseAdmin
-            .from('users')
-            .update({ credits: newCredits })
-            .eq('email', email);
-        if (updateError) {
-            return res.status(500).json({ error: 'Kredi güncellenirken hata oluştu.' });
+
+        // Kredi kontrolü
+        if (userData.credits <= 0) {
+            return res.status(400).json({ error: 'Yetersiz kredi.' });
         }
-        res.status(200).json({ message: `${email} kullanıcısının kredisi ${amount} artırıldı. Yeni kredi miktarı: ${newCredits}` });
+
+        // Krediyi düşür
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ credits: userData.credits - 1 })
+            .eq('id', user.id);
+
+        if (updateError) {
+            return res.status(400).json({ error: updateError.message });
+        }
+
+        res.status(200).json({ message: 'Try-on successful. Credit deducted.' });
+
     } catch (err) {
-        res.status(500).json({ error: 'Sunucu hatası.' });
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// Sunucuyu başlatma
+// Manuel Kredi Ekleme (/api/add-credits)
+app.post('/api/add-credits', async (req, res) => {
+    const { email, creditsToAdd } = req.body;
+
+    // Gerekli alanların kontrolü
+    if (!email || !creditsToAdd) {
+        return res.status(400).json({ error: 'E-posta ve kredi miktarı girilmesi zorunludur.' });
+    }
+
+    try {
+        // E-posta ile kullanıcıyı bul
+        const { data: users, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('email', email);
+
+        if (error || !users || users.length === 0) {
+            return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
+        }
+
+        const user = users[0];
+
+        // Krediyi güncelle
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ credits: user.credits + creditsToAdd })
+            .eq('id', user.id);
+
+        if (updateError) {
+            return res.status(400).json({ error: updateError.message });
+        }
+
+        res.status(200).json({ message: `${creditsToAdd} kredi başarıyla eklendi.` });
+
+    } catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Uygulamayı belirtilen portta başlat
 app.listen(port, () => {
-    console.log(`Sunucu http://localhost:${port} adresinde çalışıyor.`);
+    console.log(`Server is running on port ${port}`);
 });
