@@ -1,5 +1,6 @@
 // Gerekli kütüphaneleri dahil etme
 const express = require('express');
+const app = express();
 app.use(express.json());
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
