@@ -1,17 +1,19 @@
 // Gerekli kütüphaneleri dahil etme
+// Gereki kütüphaneleri dahil etme
 const express = require('express');
-const app = express();
-const { createClient } = require('@supabase/supabase-js');
-const cors = require('cors');
-require('dotenv').config();
-
-// Uygulama ve port ayarları
-const app = express();
-const port = 3000;
+const app = express(); // 'app' sadece bir kez tanımlanmalı
 
 // Middleware'lar
 app.use(express.json());
+app.use(require('@supabase/supabase-js')); // Bu satırda hata olabilir
+app.use(require('cors'));
+app.use(require('dotenv').config());
 app.use(cors());
+
+
+// Uygulama ve port ayarları
+const port = 3000;
+
 
 // Supabase client oluşturma (Genel/Kullanıcı işlemleri için anonim anahtar)
 const supabaseUrl = process.env.SUPABASE_URL;
